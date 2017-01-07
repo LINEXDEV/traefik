@@ -10,6 +10,7 @@ import (
 	"strings"
 	"text/template"
 	"time"
+	"fmt"
 
 	"github.com/BurntSushi/ty/fun"
 	"github.com/cenk/backoff"
@@ -258,6 +259,8 @@ func (provider *Docker) loadDockerConfig(containersInspected []dockerData) *type
 		"getMaxConnAmount":            provider.getMaxConnAmount,
 		"getMaxConnExtractorFunc":     provider.getMaxConnExtractorFunc,
 		"getSticky":                   provider.getSticky,
+		"getDisableSwarmLoadBalancer": provider.getDisableSwarmLoadBalancer,
+
 	}
 
 	// filter containers
@@ -463,6 +466,13 @@ func (provider *Docker) getSticky(container dockerData) string {
 	return "false"
 }
 
+func (provider *Docker) getDisableSwarmLoadBalancer(container dockerData) string {
+	if _, err := getLabel(container, "traefik.backend.disable.swarm.loadbalancer"); err == nil {
+		return "true"
+	}
+	return "false"
+}
+
 func (provider *Docker) getDomain(container dockerData) string {
 	if label, err := getLabel(container, "traefik.domain"); err == nil {
 		return label
@@ -614,11 +624,19 @@ func listServices(ctx context.Context, dockerClient client.APIClient) ([]dockerD
 	}
 
 	var dockerDataList []dockerData
+	var dockerDataListTasks []dockerData
 
 	for _, service := range serviceList {
+		log.Debug("MJF: listServices --> service: %+v", service)
 		dockerData := parseService(service, networkMap)
 
-		dockerDataList = append(dockerDataList, dockerData)
+		//dockerDataList = append(dockerDataList, dockerData)
+		
+		dockerDataListTasks, err = listTasks(ctx, dockerClient, service.ID, dockerData)
+
+		for _, dockerDataTask := range dockerDataListTasks {
+			dockerDataList = append(dockerDataList, dockerDataTask)
+		}
 	}
 	return dockerDataList, err
 
@@ -647,6 +665,13 @@ func parseService(service swarmtypes.Service, networkMap map[string]*dockertypes
 						Addr: ip.String(),
 					}
 					dockerData.NetworkSettings.Networks[network.Name] = network
+					fmt.Println("MJF: parseService.dockerData.Name %+v", dockerData.Name)
+					fmt.Println("MJF: parseService.dockerData.Labels %+v", dockerData.Labels)
+					fmt.Println("MJF: parseService.dockerData.NetworkSettings %+v", dockerData.NetworkSettings.Networks)
+					fmt.Println("MJF: parseService.dockerData.NetworkSettings.ID %+v", dockerData.NetworkSettings.Networks[network.Name].ID)
+					fmt.Println("MJF: parseService.dockerData.NetworkSettings.Name %+v", dockerData.NetworkSettings.Networks[network.Name].Name)
+					fmt.Println("MJF: parseService.dockerData.NetworkSettings.Addr %+v", dockerData.NetworkSettings.Networks[network.Name].Addr)
+
 				} else {
 					log.Debug("Network not found, id: %s", virtualIP.NetworkID)
 				}
@@ -654,5 +679,55 @@ func parseService(service swarmtypes.Service, networkMap map[string]*dockertypes
 			}
 		}
 	}
+	return dockerData
+}
+
+
+
+
+
+func listTasks(ctx context.Context, dockerClient client.APIClient, serviceID string, serviceDockerData dockerData) ([]dockerData, error) {
+	taskList, err := dockerClient.TaskList(ctx, dockertypes.TaskListOptions{})
+	if err != nil {
+		return []dockerData{}, err
+	}
+	var dockerDataList []dockerData
+
+	for _, task := range taskList {
+		
+		fmt.Println("MJF: TASK %+v", task)
+		if task.ServiceID == serviceID {
+			dockerData := parseTasks(task, serviceDockerData)
+			dockerDataList = append(dockerDataList, dockerData)
+		}
+	}
+	return dockerDataList, err
+
+}
+
+func parseTasks(task swarmtypes.Task, serviceDockerData dockerData) dockerData {
+	dockerData := dockerData{
+		Name:            serviceDockerData.Name + strconv.Itoa(task.Slot),
+		Labels:          serviceDockerData.Labels,
+		NetworkSettings: networkSettings{},
+	}
+
+	if task.NetworksAttachments != nil {
+		dockerData.NetworkSettings.Networks = make(map[string]*networkData)
+		ip, _, _ := net.ParseCIDR(task.NetworksAttachments[0].Addresses[0])
+		network := &networkData{
+			ID:   task.NetworksAttachments[0].Network.ID,
+			Name: strconv.Itoa(task.Slot),	//hack for now.
+			Addr: ip.String(),
+		}
+		dockerData.NetworkSettings.Networks[network.Name] = network
+	}
+	
+	fmt.Printf("MJF: parseTasks.dockerData.Name %+v \n", dockerData.Name)
+	fmt.Printf("MJF: parseTasks.dockerData.Labels %+v \n", dockerData.Labels)
+	fmt.Printf("MJF: parseTasks.dockerData.NetworkSettings %+v \n", dockerData.NetworkSettings.Networks)
+	fmt.Printf("MJF: parseTasks.dockerData.NetworkSettings.ID %+v \n", dockerData.NetworkSettings.Networks[strconv.Itoa(task.Slot)].ID)
+	fmt.Printf("MJF: parseTasks.dockerData.NetworkSettings.Name %+v \n", dockerData.NetworkSettings.Networks[strconv.Itoa(task.Slot)].Name)
+	fmt.Printf("MJF: parseTasks.dockerData.NetworkSettings.Addr %+v \n", dockerData.NetworkSettings.Networks[strconv.Itoa(task.Slot)].Addr)
 	return dockerData
 }
