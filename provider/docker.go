@@ -685,7 +685,10 @@ func listTasks(ctx context.Context, dockerClient client.APIClient, serviceID str
 	for _, task := range taskList {
 		if task.ServiceID == serviceID {
 			dockerData := parseTasks(task, serviceDockerData, networkMap)
-			dockerDataList = append(dockerDataList, dockerData)
+			// include only available "Running" containers into configs
+			if (task.Status.State == swarm.TaskStateRunning) {
+				dockerDataList = append(dockerDataList, dockerData)
+			}
 		}
 	}
 	return dockerDataList, err
@@ -712,6 +715,9 @@ func parseTasks(task swarmtypes.Task, serviceDockerData dockerData, networkMap m
 						Addr: ip.String(),
 					}
 					dockerData.NetworkSettings.Networks[network.Name] = network
+					// override task slot-based name with IP based name
+					// (ensures uniqueness for global container names when slot always == 0)
+					dockerData.Name = serviceDockerData.Name + "." + strings.Replace(network.Addr, ".", "-", -1)
 				}
 			}
 		}
