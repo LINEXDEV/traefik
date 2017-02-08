@@ -78,6 +78,7 @@ func (a nodeSorter) Less(i int, j int) bool {
 func (provider *ConsulCatalog) watchServices(stopCh <-chan struct{}) <-chan map[string][]string {
 	watchCh := make(chan map[string][]string)
 
+	health := provider.client.Health()
 	catalog := provider.client.Catalog()
 
 	safe.Go(func() {
@@ -92,19 +93,27 @@ func (provider *ConsulCatalog) watchServices(stopCh <-chan struct{}) <-chan map[
 			default:
 			}
 
-			data, meta, err := catalog.Services(opts)
+			_, meta, err := health.State("passing", opts)
 			if err != nil {
-				log.WithError(err).Errorf("Failed to list services")
+				log.WithError(err).Errorf("Failed to retrieve health checks")
 				return
 			}
 
 			// If LastIndex didn't change then it means `Get` returned
 			// because of the WaitTime and the key didn't changed.
 			if opts.WaitIndex == meta.LastIndex {
+				log.Debugf("[CARAMBA] LastIndex is the same: %v", meta.LastIndex)
 				continue
 			}
+			log.Debugf("[CARAMBA] LastIndex has been changed: %v", meta.LastIndex)
 			opts.WaitIndex = meta.LastIndex
 
+
+			data, _, err := catalog.Services(&api.QueryOptions{})
+			if err != nil {
+				log.WithError(err).Errorf("Failed to list services")
+				return
+			}
 			if data != nil {
 				watchCh <- data
 			}

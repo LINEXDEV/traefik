@@ -10,4 +10,4 @@ docker-machine ssh dev-$LINEX_STACK-SwarmManager "docker service rm traefik"
 
 docker push hub.linexdev.io/$LINEX_STACK/traefik
 
-linex --action swarm-traefik
+linex --action traefik
