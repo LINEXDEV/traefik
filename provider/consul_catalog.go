@@ -78,13 +78,15 @@ func (a nodeSorter) Less(i int, j int) bool {
 func (provider *ConsulCatalog) watchServices(stopCh <-chan struct{}) <-chan map[string][]string {
 	watchCh := make(chan map[string][]string)
 
-	health := provider.client.Health()
 	catalog := provider.client.Catalog()
+	health := provider.client.Health()
+	var lastHealthIndex uint64
 
 	safe.Go(func() {
 		defer close(watchCh)
 
-		opts := &api.QueryOptions{WaitTime: DefaultWatchWaitTime}
+		catalogOptions := &api.QueryOptions{WaitTime: DefaultWatchWaitTime}
+		healthOptions := &api.QueryOptions{}
 
 		for {
 			select {
@@ -93,7 +95,16 @@ func (provider *ConsulCatalog) watchServices(stopCh <-chan struct{}) <-chan map[
 			default:
 			}
 
-			_, meta, err := health.State("passing", opts)
+			data, catalogMeta, err := catalog.Services(catalogOptions)
+			if err != nil {
+				log.WithError(err).Errorf("Failed to list services")
+				return
+			}
+
+			// Listening to changes that leads to `passing` state or degrades from it.
+			// The call is used just as a trigger for further actions
+			// (intentionally there is no interest in the received data).
+			_, healthMeta, err := health.State("passing", healthOptions)
 			if err != nil {
 				log.WithError(err).Errorf("Failed to retrieve health checks")
 				return
@@ -101,19 +112,14 @@ func (provider *ConsulCatalog) watchServices(stopCh <-chan struct{}) <-chan map[
 
 			// If LastIndex didn't change then it means `Get` returned
 			// because of the WaitTime and the key didn't changed.
-			if opts.WaitIndex == meta.LastIndex {
-				log.Debugf("[CARAMBA] LastIndex is the same: %v", meta.LastIndex)
+			sameServiceAmount := catalogOptions.WaitIndex == catalogMeta.LastIndex
+			sameServiceHealth := lastHealthIndex == healthMeta.LastIndex
+			if sameServiceAmount && sameServiceHealth {
 				continue
 			}
-			log.Debugf("[CARAMBA] LastIndex has been changed: %v", meta.LastIndex)
-			opts.WaitIndex = meta.LastIndex
+			catalogOptions.WaitIndex = catalogMeta.LastIndex
+			lastHealthIndex = healthMeta.LastIndex
 
-
-			data, _, err := catalog.Services(&api.QueryOptions{})
-			if err != nil {
-				log.WithError(err).Errorf("Failed to list services")
-				return
-			}
 			if data != nil {
 				watchCh <- data
 			}
@@ -343,7 +349,7 @@ func (provider *ConsulCatalog) Provide(configurationChan chan<- types.ConfigMess
 		operation := func() error {
 			return provider.watch(configurationChan, stop)
 		}
-		err := backoff.RetryNotify(operation, job.NewBackOff(backoff.NewExponentialBackOff()), notify)
+		err := backoff.RetryNotify(safe.OperationWithRecover(operation), job.NewBackOff(backoff.NewExponentialBackOff()), notify)
 		if err != nil {
 			log.Errorf("Cannot connect to consul server %+v", err)
 		}
