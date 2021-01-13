@@ -1,10 +1,10 @@
 FROM golang:1.15.6
 
-RUN go get github.com/Masterminds/glide \
-&& go get github.com/jteeuwen/go-bindata/... \
-&& go get -u -v golang.org/x/lint/golint \
-&& go get github.com/kisielk/errcheck \
-&& go get github.com/client9/misspell/cmd/misspell
+RUN go get github.com/Masterminds/glide
+RUN go get github.com/jteeuwen/go-bindata/...
+RUN go get -u -v golang.org/x/lint/golint
+RUN go get github.com/kisielk/errcheck
+RUN go get github.com/client9/misspell/cmd/misspell
 
 # Which docker version to test on
 ARG DOCKER_VERSION=1.10.1
