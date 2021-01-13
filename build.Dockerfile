@@ -2,7 +2,7 @@ FROM golang:1.7
 
 RUN go get github.com/Masterminds/glide \
 && go get github.com/jteeuwen/go-bindata/... \
-&& go get github.com/golang/lint/golint \
+&& go get -u -v golang.org/x/lint/golint \
 && go get github.com/kisielk/errcheck \
 && go get github.com/client9/misspell/cmd/misspell
 
